@@ -1,5 +1,14 @@
 // eslint-disable-next-line prettier/prettier
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  BadRequestException,
+} from '@nestjs/common';
 import { ItemService } from './item.service';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
@@ -20,7 +29,7 @@ export class ItemController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    // Le symbole '+' convertit l'ID reçu en chaîne de caractères (depuis l'URL) en nombre entier
+    // '+' convertit l'ID reçu en chaîne de caractères (depuis l'URL) en nombre entier
     return this.itemService.findOne(+id);
   }
 
@@ -36,7 +45,16 @@ export class ItemController {
 
   // --- ROUTE SPÉCIFIQUE MÉTIER ---
   @Post(':id/decrement')
-  decrement(@Param('id') id: string, @Body('amount') amount: number) {
+  async decrement(@Param('id') id: string, @Body() body: any) {
+    // On force la conversion et on vérifie la présence de la donnée
+    const amount = parseInt(body.amount, 10);
+
+    if (isNaN(amount)) {
+      throw new BadRequestException(
+        "La quantité 'amount' est manquante ou invalide.",
+      );
+    }
+
     return this.itemService.decrement(+id, amount);
   }
 }

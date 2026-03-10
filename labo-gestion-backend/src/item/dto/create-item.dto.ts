@@ -16,7 +16,7 @@ export class CreateItemDto {
   readonly internalRef?: string;
 
   @IsString()
-  readonly supplierRef: string;
+  readonly supplierRef?: string;
 
   @IsNumber()
   @IsOptional()

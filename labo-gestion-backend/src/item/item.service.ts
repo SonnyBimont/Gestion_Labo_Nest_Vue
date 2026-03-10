@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Item } from './entities/item.entity';
 import { Supplier } from '../suppliers/entities/supplier.entity';
@@ -47,25 +52,22 @@ export class ItemService {
   // --- LOGIQUE MÉTIER LABO STOCK ALERT ---
   async decrement(id: number, amount: number): Promise<Item> {
     const item = await this.findOne(id);
-    if (item.quantity < amount) {
-      throw new Error('Stock insuffisant');
-    }
 
-    item.quantity -= amount;
-    await item.save();
-    return item;
-  }
+    const newQuantity = item.quantity - amount;
 
-  async decrementStock(id: number, amount: number): Promise<Item> {
-    const item = await this.findOne(id);
-    item.quantity -= amount;
-    await item.save();
-
-    if (item.quantity <= item.lowStockThreshold) {
-      this.logger.warn(
-        `ALERTE : Stock critique pour [${item.name}]. Quantité restante : ${item.quantity}.`,
+    // Sécurité ultime avant la BDD
+    if (isNaN(newQuantity)) {
+      throw new BadRequestException(
+        'Erreur de calcul du stock : valeur non numérique.',
       );
     }
-    return item;
+
+    if (newQuantity < 0) {
+      throw new BadRequestException(
+        `Stock insuffisant (actuel: ${item.quantity})`,
+      );
+    }
+
+    return item.update({ quantity: newQuantity });
   }
 }

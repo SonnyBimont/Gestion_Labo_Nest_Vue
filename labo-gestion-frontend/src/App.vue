@@ -66,20 +66,20 @@ const fetchSuppliers = async () => {
   }
 };
 
+// Enregistrer ou mettre à jour un équipement
 const submitForm = async () => {
   error.value = null;
   successMessage.value = null;
 
-  // Formatage strict pour le back-end
   const payload = {
     name: formItem.value.name,
     internalRef: formItem.value.internalRef || null,
     supplierRef: formItem.value.supplierRef,
-    price: Number(formItem.value.price),
+    price: formItem.value.price ? Number(formItem.value.price) : 0,
     quantity: Number(formItem.value.quantity),
     isP2: Boolean(formItem.value.isP2),
     lowStockThreshold: Number(formItem.value.lowStockThreshold),
-    supplierId: formItem.value.supplierId || null
+    supplierId: formItem.value.supplierId ? Number(formItem.value.supplierId) : null
   };
 
   try {
@@ -96,25 +96,42 @@ const submitForm = async () => {
     }
     cancelEdit();
   } catch (err: any) {
-    error.value = err.response?.data?.message || "Erreur lors de l'opération.";
+    error.value = err.response?.data?.message || "Erreur serveur (Vérifiez les logs NestJS)";
   }
 };
 
+// Sortir du stock
 const useItem = async (item: Item) => {
   if (!item.id) return;
-  const amountToUse = Number(decrementAmounts.value[item.id]);
 
-  if (amountToUse <= 0 || amountToUse > item.quantity) {
-    error.value = `Quantité invalide pour ${item.name}.`;
+  // 1. Récupération de la valeur
+  const rawValue = decrementAmounts.value[item.id];
+
+  // 2. Conversion forcée en nombre
+  const qty = parseInt(String(rawValue), 10);
+
+  // 3. Vérification locale avant envoi
+  if (isNaN(qty) || qty <= 0) {
+    alert("Veuillez saisir un nombre valide dans le champ quantité.");
     return;
   }
 
   try {
-    const response = await apiClient.post<Item>(`/items/${item.id}/decrement`, { amount: amountToUse });
+    // 4. Envoi au serveur avec la clé "amount" bien définie
+    const response = await apiClient.post<Item>(`/items/${item.id}/decrement`, {
+      amount: qty
+    });
+
+    // 5. Mise à jour de l'affichage
     const index = items.value.findIndex(i => i.id === item.id);
-    if (index !== -1) items.value[index] = response.data;
+    if (index !== -1) {
+      items.value[index] = response.data;
+    }
+
+    // Réinitialisation du petit champ de saisie à 1
     decrementAmounts.value[item.id] = 1;
-    successMessage.value = `Stock mis à jour.`;
+    successMessage.value = `Stock mis à jour pour ${item.name}.`;
+
   } catch (err: any) {
     error.value = err.response?.data?.message || "Erreur lors de la mise à jour.";
   }
