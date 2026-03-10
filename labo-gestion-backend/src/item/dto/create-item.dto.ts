@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call */
 import { IsString, IsInt, IsBoolean, IsOptional, Min } from 'class-validator';
 
 export class CreateItemDto {
@@ -6,17 +5,25 @@ export class CreateItemDto {
   readonly name: string;
 
   @IsString()
-  readonly reference: string;
+  @IsOptional()
+  readonly internalRef?: string;
+
+  @IsString()
+  readonly supplierRef: string;
 
   @IsInt()
   @Min(0)
   readonly quantity: number;
 
-  @IsInt()
-  @IsOptional()
-  readonly lowStockAlert?: number;
-
   @IsBoolean()
   @IsOptional()
   readonly isP2?: boolean;
+
+  @IsInt()
+  @IsOptional()
+  readonly lowStockThreshold?: number;
+
+  @IsInt()
+  @IsOptional()
+  readonly supplierId?: number;
 }

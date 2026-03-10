@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Item } from './entities/item.entity';
+import { Supplier } from '../suppliers/entities/supplier.entity';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 
@@ -12,6 +13,8 @@ export class ItemService {
   constructor(
     @InjectModel(Item)
     private itemModel: typeof Item,
+    @InjectModel(Supplier)
+    private supplierModel: typeof Supplier,
   ) {}
 
   // --- CRUD ---
@@ -20,11 +23,11 @@ export class ItemService {
   }
 
   async findAll(): Promise<Item[]> {
-    return this.itemModel.findAll({ order: [['name', 'ASC']] });
+    return this.itemModel.findAll({ include: [Supplier] });
   }
 
   async findOne(id: number): Promise<Item> {
-    const item = await this.itemModel.findByPk(id);
+    const item = await this.itemModel.findByPk(id, { include: [Supplier] });
     if (!item) {
       throw new NotFoundException(`Consommable avec l'ID #${id} introuvable.`);
     }
@@ -47,7 +50,7 @@ export class ItemService {
     item.quantity -= amount;
     await item.save();
 
-    if (item.quantity <= item.lowStockAlert) {
+    if (item.quantity <= item.lowStockThreshold) {
       this.logger.warn(
         `ALERTE : Stock critique pour [${item.name}]. Quantité restante : ${item.quantity}.`,
       );

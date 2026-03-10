@@ -5,13 +5,15 @@ import { ValidationPipe } from '@nestjs/common';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Activation DTO
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // Rejette les champs non définis dans le DTO
-      forbidNonWhitelisted: true, // Renvoie une erreur si des champs non autorisés sont envoyés
+      whitelist: true,
+      forbidNonWhitelisted: true,
     }),
   );
+
+  // Autorise le front-end Vue.js à communiquer avec l'API
+  app.enableCors();
 
   await app.listen(process.env.PORT ?? 3000);
 }
