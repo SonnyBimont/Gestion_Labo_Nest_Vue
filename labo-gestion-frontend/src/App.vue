@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, nextTick } from 'vue';
 import { apiClient } from './services/api';
 import Login from './components/Login.vue';
 
@@ -44,9 +44,15 @@ const formItem = ref<Item>({
 });
 
 // --- LOGIQUE AUTHENTIFICATION ---
-const checkAuth = () => {
-  isAuthenticated.value = !!localStorage.getItem('token');
-  if (isAuthenticated.value) {
+const checkAuth = async () => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    isAuthenticated.value = true;
+    error.value = null; // On réinitialise l'erreur avant de charger
+
+    // On attend un cycle d'horloge pour que l'intercepteur Axios soit prêt
+    await nextTick();
+
     fetchItems();
     fetchSuppliers();
   }

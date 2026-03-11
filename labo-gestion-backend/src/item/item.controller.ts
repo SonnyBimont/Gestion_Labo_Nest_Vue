@@ -1,18 +1,10 @@
-// eslint-disable-next-line prettier/prettier
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Patch,
-  Param,
-  Delete,
-  BadRequestException,
-} from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, BadRequestException } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ItemService } from './item.service';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 
+@UseGuards(JwtAuthGuard)
 @Controller('items') // préfixe URL
 export class ItemController {
   constructor(private readonly itemService: ItemService) {}
