@@ -11,36 +11,36 @@ import { Supplier } from '../../suppliers/entities/supplier.entity';
 @Table
 export class Item extends Model {
   @Column
-  name: string;
+  declare name: string;
 
   // 1. Référence interne (Traçabilité labo)
   @Column({ unique: true })
-  internalRef: string;
+  declare internalRef: string;
 
   // 2. Référence externe (Commandes)
   @Column
-  supplierRef: string;
+  declare supplierRef: string;
 
   // 3. Prix unitaire (FLOAT pour les décimales)
   @Column({ type: DataType.FLOAT, allowNull: true })
-  price: number;
+  declare price: number;
 
-  @Column
-  quantity: number;
+  @Column({ type: DataType.INTEGER })
+  declare quantity: number;
 
-  @Column({ defaultValue: 5 })
-  lowStockThreshold: number;
+  @Column({ type: DataType.INTEGER, defaultValue: 5 })
+  declare lowStockThreshold: number;
 
   @Column({ defaultValue: false })
-  isP2: boolean;
+  declare isP2: boolean;
 
   // --- RELATION AVEC LE FOURNISSEUR ---
   // Colonne "supplierId"
   @ForeignKey(() => Supplier)
   @Column
-  supplierId: number;
+  declare supplierId: number;
 
   // Indique à l'ORM comment charger les données du fournisseur
   @BelongsTo(() => Supplier)
-  supplier: Supplier;
+  declare supplier: Supplier;
 }

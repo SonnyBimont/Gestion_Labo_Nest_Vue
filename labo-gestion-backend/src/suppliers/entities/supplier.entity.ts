@@ -3,15 +3,15 @@ import { Item } from '../../item/entities/item.entity';
 @Table
 export class Supplier extends Model {
   @Column
-  name: string;
+  declare name: string;
 
   @Column
-  contact: string;
+  declare contact: string;
 
   @Column
-  email: string;
+  declare email: string;
 
   // un fournisseur est lié à plusieurs articles
   @HasMany(() => Item)
-  items: Item[];
+  declare items: Item[];
 }

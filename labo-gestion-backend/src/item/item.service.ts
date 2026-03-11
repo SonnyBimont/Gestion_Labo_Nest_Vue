@@ -55,7 +55,6 @@ export class ItemService {
 
     const newQuantity = item.quantity - amount;
 
-    // Sécurité ultime avant la BDD
     if (isNaN(newQuantity)) {
       throw new BadRequestException(
         'Erreur de calcul du stock : valeur non numérique.',
@@ -68,6 +67,7 @@ export class ItemService {
       );
     }
 
-    return item.update({ quantity: newQuantity });
+    await item.update({ quantity: newQuantity });
+    return this.findOne(id);
   }
 }
