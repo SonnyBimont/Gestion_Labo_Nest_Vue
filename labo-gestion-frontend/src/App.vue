@@ -246,6 +246,7 @@ onMounted(() => {
             <th>Nom</th>
             <th>Réf. Interne</th>
             <th>Fournisseur</th>
+            <th>Réf. Fournisseur</th>
             <th>Prix</th>
             <th>Stock</th>
             <th>P2</th>
@@ -257,6 +258,7 @@ onMounted(() => {
             <td>{{ item.name }}</td>
             <td>{{ item.internalRef || '-' }}</td>
             <td>{{ item.supplier?.name || '-' }}</td>
+            <td>{{ item.supplierRef || '-' }}</td>
             <td>{{ item.price ? item.price + ' €' : '-' }}</td>
             <td :class="{ 'low-stock': item.quantity <= (item.lowStockThreshold || 5) }">
               {{ item.quantity }}
