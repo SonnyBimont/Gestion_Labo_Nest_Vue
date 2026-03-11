@@ -6,6 +6,8 @@ import { ItemModule } from './item/item.module';
 import { SupplierModule } from './suppliers/suppliers.module';
 import { Item } from './item/entities/item.entity';
 import { Supplier } from './suppliers/entities/supplier.entity';
+import { UsersModule } from './users/users.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { Supplier } from './suppliers/entities/supplier.entity';
     }),
     ItemModule,
     SupplierModule,
+    UsersModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

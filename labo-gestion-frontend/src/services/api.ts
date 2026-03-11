@@ -5,6 +5,14 @@ export const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  // L'option timeout évite que l'application ne bloque indéfiniment si le serveur ne répond pas
   timeout: 5000,
+});
+
+// Intercepteur pour injecter le token JWT automatiquement
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
