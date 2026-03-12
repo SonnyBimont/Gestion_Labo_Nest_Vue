@@ -691,179 +691,6 @@ onMounted(() => {
     </section> -->
 
     <section class="panel">
-      <div class="panel-heading">
-        <div>
-          <p class="section-kicker">Fournisseurs</p>
-          <h2>Créer et consulter les fournisseurs référencés</h2>
-        </div>
-      </div>
-
-      <div class="suppliers-layout">
-        <form @submit.prevent="submitSupplierForm" class="supplier-form-panel">
-          <div class="form-group">
-            <label for="supplierName">Nom du fournisseur</label>
-            <input id="supplierName" v-model="supplierForm.name" type="text" required />
-          </div>
-
-          <div class="form-group">
-            <label for="supplierContact">Contact</label>
-            <input id="supplierContact" v-model="supplierForm.contact" type="text" required />
-          </div>
-
-          <div class="form-group">
-            <label for="supplierEmail">Email</label>
-            <input id="supplierEmail" v-model="supplierForm.email" type="email" required />
-          </div>
-
-          <div class="supplier-form-actions">
-            <button type="submit" class="btn btn-primary">
-              {{ editingSupplierId ? 'Mettre à jour le fournisseur' : 'Ajouter le fournisseur' }}
-            </button>
-            <button
-              v-if="editingSupplierId"
-              type="button"
-              class="btn btn-secondary"
-              @click="cancelSupplierEdit"
-            >
-              Annuler
-            </button>
-          </div>
-        </form>
-
-        <div class="suppliers-list-panel">
-          <div class="suppliers-list-header">
-            <span>{{ filteredSuppliers.length }} fournisseur(s) affiché(s)</span>
-            <span class="subtle-note">Les 3 derniers par défaut, ou tous les résultats via la recherche</span>
-          </div>
-
-          <div class="form-group supplier-search-group">
-            <label for="supplierSearch">Rechercher un fournisseur</label>
-            <input
-              id="supplierSearch"
-              v-model="supplierSearch"
-              type="text"
-              placeholder="Nom du fournisseur, contact ou email"
-            />
-          </div>
-
-          <div v-if="filteredSuppliers.length > 0" class="supplier-list-wrapper">
-            <div class="supplier-list-head supplier-list-row">
-              <span>Fournisseur</span>
-              <span>Contact</span>
-              <span>Email</span>
-              <span>Articles liés</span>
-              <span>Actions</span>
-            </div>
-
-            <article v-for="supplier in filteredSuppliers" :key="supplier.id" class="supplier-list-row supplier-list-item">
-              <strong>{{ supplier.name }}</strong>
-              <span>{{ supplier.contact }}</span>
-              <a
-                :href="buildSupplierRestockMailto(supplier)"
-                :title="`Envoyer une demande de réapprovisionnement à ${supplier.contact}`"
-              >
-                {{ supplier.email }}
-              </a>
-              <span class="supplier-usage">
-                {{ getSupplierItemCount(supplier.id) }} article(s)
-              </span>
-              <div class="supplier-actions">
-                <button type="button" class="btn btn-info btn-sm" @click="editSupplier(supplier)">
-                  Éditer
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-danger btn-sm"
-                  @click="deleteSupplier(supplier)"
-                  :disabled="isSupplierUsed(supplier.id)"
-                  :title="isSupplierUsed(supplier.id) ? 'Suppression bloquée : fournisseur utilisé par des articles.' : 'Supprimer ce fournisseur'"
-                >
-                  Supprimer
-                </button>
-              </div>
-            </article>
-          </div>
-          <p v-else class="empty-state">Aucun fournisseur ne correspond à la recherche.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-heading">
-        <div>
-          <p class="section-kicker">Paramétrage article</p>
-          <h2>{{ editingId ? 'Modifier un article' : 'Ajouter un article' }}</h2>
-        </div>
-      </div>
-
-      <form @submit.prevent="submitForm" class="item-form">
-        <div class="form-group wide">
-          <label for="name">Nom</label>
-          <input id="name" v-model="formItem.name" type="text" required />
-        </div>
-
-        <div class="form-group">
-          <label for="internalRef">Réf. interne</label>
-          <input id="internalRef" v-model="formItem.internalRef" type="text" />
-        </div>
-
-        <div class="form-group">
-          <label for="supplier">Fournisseur</label>
-          <select id="supplier" v-model="formItem.supplierId">
-            <option :value="null">-- Sélectionner --</option>
-            <option v-for="supplier in suppliers" :key="supplier.id" :value="supplier.id">
-              {{ supplier.name }}
-            </option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="supplierRef">Réf. fournisseur</label>
-          <input id="supplierRef" v-model="formItem.supplierRef" type="text" required />
-        </div>
-
-        <div class="form-group">
-          <label for="price">Prix unitaire</label>
-          <input id="price" v-model.number="formItem.price" type="number" step="0.01" min="0" />
-        </div>
-
-        <div class="form-group">
-          <label for="quantity">Stock actuel</label>
-          <input id="quantity" v-model.number="formItem.quantity" type="number" min="0" required />
-        </div>
-
-        <div class="form-group">
-          <label for="stockMax">Stock max</label>
-          <input id="stockMax" v-model.number="formItem.stockMax" type="number" min="0" />
-        </div>
-
-        <div class="form-group">
-          <label for="threshold">Seuil d'alerte</label>
-          <input
-            id="threshold"
-            v-model.number="formItem.lowStockThreshold"
-            type="number"
-            min="0"
-          />
-        </div>
-
-        <label class="checkbox-group">
-          <input v-model="formItem.isP2" type="checkbox" />
-          <span>Zone P2</span>
-        </label>
-
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">
-            {{ editingId ? 'Mettre à jour' : 'Enregistrer' }}
-          </button>
-          <button v-if="editingId" type="button" @click="cancelEdit" class="btn btn-secondary">
-            Annuler
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <section class="panel">
       <div class="panel-heading report-heading">
         <div>
           <p class="section-kicker">Réapprovisionnement</p>
@@ -1049,6 +876,182 @@ onMounted(() => {
       </div>
       <p v-else class="empty-state">Aucun article ne correspond aux critères de recherche ou de filtre.</p>
     </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-kicker">Paramétrage article</p>
+          <h2>{{ editingId ? 'Modifier un article' : 'Ajouter un article' }}</h2>
+        </div>
+      </div>
+
+      <form @submit.prevent="submitForm" class="item-form">
+        <div class="form-group wide">
+          <label for="name">Nom</label>
+          <input id="name" v-model="formItem.name" type="text" required />
+        </div>
+
+        <div class="form-group">
+          <label for="internalRef">Réf. interne</label>
+          <input id="internalRef" v-model="formItem.internalRef" type="text" />
+        </div>
+
+        <div class="form-group">
+          <label for="supplier">Fournisseur</label>
+          <select id="supplier" v-model="formItem.supplierId">
+            <option :value="null">-- Sélectionner --</option>
+            <option v-for="supplier in suppliers" :key="supplier.id" :value="supplier.id">
+              {{ supplier.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="supplierRef">Réf. fournisseur</label>
+          <input id="supplierRef" v-model="formItem.supplierRef" type="text" required />
+        </div>
+
+        <div class="form-group">
+          <label for="price">Prix unitaire</label>
+          <input id="price" v-model.number="formItem.price" type="number" step="0.01" min="0" />
+        </div>
+
+        <div class="form-group">
+          <label for="quantity">Stock actuel</label>
+          <input id="quantity" v-model.number="formItem.quantity" type="number" min="0" required />
+        </div>
+
+        <div class="form-group">
+          <label for="stockMax">Stock max</label>
+          <input id="stockMax" v-model.number="formItem.stockMax" type="number" min="0" />
+        </div>
+
+        <div class="form-group">
+          <label for="threshold">Seuil d'alerte</label>
+          <input
+            id="threshold"
+            v-model.number="formItem.lowStockThreshold"
+            type="number"
+            min="0"
+          />
+        </div>
+
+        <label class="checkbox-group">
+          <input v-model="formItem.isP2" type="checkbox" />
+          <span>Zone P2</span>
+        </label>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">
+            {{ editingId ? 'Mettre à jour' : 'Enregistrer' }}
+          </button>
+          <button v-if="editingId" type="button" @click="cancelEdit" class="btn btn-secondary">
+            Annuler
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-kicker">Fournisseurs</p>
+          <h2>Créer et consulter les fournisseurs référencés</h2>
+        </div>
+      </div>
+
+      <div class="suppliers-layout">
+        <form @submit.prevent="submitSupplierForm" class="supplier-form-panel">
+          <div class="form-group">
+            <label for="supplierName">Nom du fournisseur</label>
+            <input id="supplierName" v-model="supplierForm.name" type="text" required />
+          </div>
+
+          <div class="form-group">
+            <label for="supplierContact">Contact</label>
+            <input id="supplierContact" v-model="supplierForm.contact" type="text" required />
+          </div>
+
+          <div class="form-group">
+            <label for="supplierEmail">Email</label>
+            <input id="supplierEmail" v-model="supplierForm.email" type="email" required />
+          </div>
+
+          <div class="supplier-form-actions">
+            <button type="submit" class="btn btn-primary">
+              {{ editingSupplierId ? 'Mettre à jour le fournisseur' : 'Ajouter le fournisseur' }}
+            </button>
+            <button
+              v-if="editingSupplierId"
+              type="button"
+              class="btn btn-secondary"
+              @click="cancelSupplierEdit"
+            >
+              Annuler
+            </button>
+          </div>
+        </form>
+
+        <div class="suppliers-list-panel">
+          <div class="suppliers-list-header">
+            <span>{{ filteredSuppliers.length }} fournisseur(s) affiché(s)</span>
+            <span class="subtle-note">Les 3 derniers par défaut, ou tous les résultats via la recherche</span>
+          </div>
+
+          <div class="form-group supplier-search-group">
+            <label for="supplierSearch">Rechercher un fournisseur</label>
+            <input
+              id="supplierSearch"
+              v-model="supplierSearch"
+              type="text"
+              placeholder="Nom du fournisseur, contact ou email"
+            />
+          </div>
+
+          <div v-if="filteredSuppliers.length > 0" class="supplier-list-wrapper">
+            <div class="supplier-list-head supplier-list-row">
+              <span>Fournisseur</span>
+              <span>Contact</span>
+              <span>Email</span>
+              <span>Articles liés</span>
+              <span>Actions</span>
+            </div>
+
+            <article v-for="supplier in filteredSuppliers" :key="supplier.id" class="supplier-list-row supplier-list-item">
+              <strong>{{ supplier.name }}</strong>
+              <span>{{ supplier.contact }}</span>
+              <a
+                :href="buildSupplierRestockMailto(supplier)"
+                :title="`Envoyer une demande de réapprovisionnement à ${supplier.contact}`"
+              >
+                {{ supplier.email }}
+              </a>
+              <span class="supplier-usage">
+                {{ getSupplierItemCount(supplier.id) }} article(s)
+              </span>
+              <div class="supplier-actions">
+                <button type="button" class="btn btn-info btn-sm" @click="editSupplier(supplier)">
+                  Éditer
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-danger btn-sm"
+                  @click="deleteSupplier(supplier)"
+                  :disabled="isSupplierUsed(supplier.id)"
+                  :title="isSupplierUsed(supplier.id) ? 'Suppression bloquée : fournisseur utilisé par des articles.' : 'Supprimer ce fournisseur'"
+                >
+                  Supprimer
+                </button>
+              </div>
+            </article>
+          </div>
+          <p v-else class="empty-state">Aucun fournisseur ne correspond à la recherche.</p>
+        </div>
+      </div>
+    </section>
+
+
+
   </main>
 </template>
 
