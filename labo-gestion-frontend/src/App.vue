@@ -516,6 +516,15 @@ const sendSingleRestockRequest = (reportItem: RestockReportItem) => {
   )
 }
 
+const sendSupplierRestockRequest = (reportItem: RestockReportItem) => {
+  const supplier = getSupplierForReportItem(reportItem)
+
+  openMailDraft(
+    supplier ? buildSupplierRestockMailto(supplier) : null,
+    `Impossible de préparer le mail groupé pour ${reportItem.supplierName || 'ce fournisseur'} : fournisseur ou email introuvable.`,
+  )
+}
+
 const exportRestockCsv = () => {
   if (itemsToRestock.value.length === 0) {
     error.value = 'Aucun article à exporter pour le réapprovisionnement.'
@@ -1134,6 +1143,10 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <p class="subtle-note">
+        En cliquant sur un fournisseur, un mail sera préparé automatiquement avec tous les articles à réapprovisionner pour ce même fournisseur.
+      </p>
+
       <p v-if="itemsToRestock.length > 8" class="subtle-note">
         Les 8 premières lignes restent visibles. Faites défiler le tableau pour consulter le reste.
       </p>
@@ -1158,7 +1171,17 @@ onUnmounted(() => {
             <tr v-for="item in itemsToRestock" :key="item.id">
               <td>{{ item.name }}</td>
               <td>{{ item.internalRef || '-' }}</td>
-              <td>{{ item.supplierName || '-' }}</td>
+              <td>
+                <button
+                  v-if="item.supplierName"
+                  type="button"
+                  class="supplier-mail-trigger"
+                  @click="sendSupplierRestockRequest(item)"
+                >
+                  {{ item.supplierName }}
+                </button>
+                <span v-else>-</span>
+              </td>
               <td>{{ item.supplierRef || '-' }}</td>
               <td>{{ item.quantity }}</td>
               <td>{{ getReportItemThreshold(item) }}</td>
@@ -1667,6 +1690,21 @@ h2 {
 .supplier-list-item a {
   color: #1f6c83;
   word-break: break-word;
+}
+
+.supplier-mail-trigger {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #1f6c83;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.supplier-mail-trigger:hover {
+  text-decoration: underline;
 }
 
 .panel-heading,

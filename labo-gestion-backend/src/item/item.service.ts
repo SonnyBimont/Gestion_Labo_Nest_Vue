@@ -107,7 +107,8 @@ export class ItemService {
         throw new NotFoundException(`Consommable avec l'ID #${id} introuvable.`);
       }
 
-      const newQuantity = item.quantity - amount;
+      const quantityBefore = item.quantity;
+      const newQuantity = quantityBefore - amount;
 
       if (isNaN(newQuantity)) {
         throw new BadRequestException(
@@ -117,7 +118,7 @@ export class ItemService {
 
       if (newQuantity < 0) {
         throw new BadRequestException(
-          `Stock insuffisant (actuel: ${item.quantity})`,
+          `Stock insuffisant (actuel: ${quantityBefore})`,
         );
       }
 
@@ -133,7 +134,7 @@ export class ItemService {
           supplierName: item.supplier?.name ?? null,
           supplierRef: item.supplierRef ?? null,
           quantity: amount,
-          quantityBefore: item.quantity,
+          quantityBefore,
           quantityAfter: newQuantity,
           note: 'Utilisation enregistrée depuis le tableau de stock.',
         },
