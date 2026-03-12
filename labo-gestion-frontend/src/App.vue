@@ -79,20 +79,18 @@ const getSupplierItemCount = (supplierId: number) =>
 
 const isSupplierUsed = (supplierId: number) => getSupplierItemCount(supplierId) > 0
 
-const sortedSuppliers = computed(() =>
-  [...suppliers.value].sort((leftSupplier, rightSupplier) =>
-    leftSupplier.name.localeCompare(rightSupplier.name, 'fr'),
-  ),
+const suppliersByRecency = computed(() =>
+  [...suppliers.value].sort((leftSupplier, rightSupplier) => rightSupplier.id - leftSupplier.id),
 )
 
 const filteredSuppliers = computed(() => {
   const searchTerm = supplierSearch.value.trim().toLocaleLowerCase('fr-FR')
 
   if (searchTerm.length === 0) {
-    return sortedSuppliers.value
+    return suppliersByRecency.value.slice(0, 3)
   }
 
-  return sortedSuppliers.value.filter((supplier) =>
+  return suppliersByRecency.value.filter((supplier) =>
     [supplier.name, supplier.contact, supplier.email]
       .some((value) => value.toLocaleLowerCase('fr-FR').includes(searchTerm)),
   )
@@ -240,6 +238,132 @@ const formatCurrency = (value?: number | null) => {
     style: 'currency',
     currency: 'EUR',
   }).format(value)
+}
+
+const getSupplierById = (supplierId?: number | null) => {
+  if (!supplierId) {
+    return null
+  }
+
+  return suppliers.value.find((supplier) => supplier.id === supplierId) ?? null
+}
+
+const getSupplierForReportItem = (reportItem: RestockReportItem) => {
+  const item = items.value.find((inventoryItem) => inventoryItem.id === reportItem.id)
+  return getSupplierById(item?.supplierId)
+}
+
+const getReportItemSupplierKey = (reportItem: RestockReportItem) => {
+  const supplier = getSupplierForReportItem(reportItem)
+
+  if (supplier) {
+    return `supplier:${supplier.id}`
+  }
+
+  return `supplier-name:${reportItem.supplierName ?? 'inconnu'}`
+}
+
+const shouldShowGroupedRestockAction = (reportItem: RestockReportItem, index: number) =>
+  itemsToRestock.value.findIndex(
+    (candidate) => getReportItemSupplierKey(candidate) === getReportItemSupplierKey(reportItem),
+  ) === index
+
+const buildRestockMailto = (
+  supplier: Supplier,
+  restockItems: Array<{ name: string; supplierRef: string | null; quantityToRestock: number }>,
+  scopeLabel: string,
+) => {
+  const subject = `Demande de réapprovisionnement labo - ${supplier.name}`
+  const bodyLines = [
+    `Bonjour ${supplier.contact},`,
+    '',
+    `${scopeLabel} :`,
+    '',
+  ]
+
+  if (restockItems.length > 0) {
+    restockItems.forEach((item) => {
+      bodyLines.push(
+        `- Article : ${item.name}`,
+        `  Référence fournisseur : ${item.supplierRef || 'Non renseignée'}`,
+        `  Quantité à réapprovisionner : ${item.quantityToRestock}`,
+        '',
+      )
+    })
+  } else {
+    bodyLines.push(
+      `- Aucun article n'est actuellement en dessous du stock cible pour ${supplier.name}.`,
+      '',
+    )
+  }
+
+  bodyLines.push('Merci,', 'Laboratoire')
+
+  return `mailto:${supplier.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines.join('\n'))}`
+}
+
+const getSupplierRestockItems = (supplierId: number) =>
+  items.value
+    .filter((item) => item.supplierId === supplierId)
+    .map((item) => ({
+      name: item.name,
+      supplierRef: item.supplierRef,
+      quantityToRestock: getRestockGap(item) ?? 0,
+    }))
+    .filter((item) => item.quantityToRestock > 0)
+
+const buildSupplierRestockMailto = (supplier: Supplier) => {
+  const restockItems = getSupplierRestockItems(supplier.id)
+  return buildRestockMailto(
+    supplier,
+    restockItems,
+    'Pouvez-vous préparer le réapprovisionnement des articles suivants',
+  )
+}
+
+const buildSingleItemRestockMailto = (reportItem: RestockReportItem) => {
+  const supplier = getSupplierForReportItem(reportItem)
+
+  if (!supplier) {
+    return null
+  }
+
+  return buildRestockMailto(
+    supplier,
+    [
+      {
+        name: reportItem.name,
+        supplierRef: reportItem.supplierRef,
+        quantityToRestock: reportItem.quantityToRestock,
+      },
+    ],
+    'Pouvez-vous préparer le réapprovisionnement de l\'article suivant',
+  )
+}
+
+const openMailDraft = (mailtoUrl: string | null, fallbackMessage: string) => {
+  if (!mailtoUrl) {
+    error.value = fallbackMessage
+    return
+  }
+
+  window.location.href = mailtoUrl
+}
+
+const sendSingleRestockRequest = (reportItem: RestockReportItem) => {
+  openMailDraft(
+    buildSingleItemRestockMailto(reportItem),
+    `Impossible de préparer le mail pour ${reportItem.name} : fournisseur ou email introuvable.`,
+  )
+}
+
+const sendGroupedRestockRequest = (reportItem: RestockReportItem) => {
+  const supplier = getSupplierForReportItem(reportItem)
+
+  openMailDraft(
+    supplier ? buildSupplierRestockMailto(supplier) : null,
+    `Impossible de préparer le mail groupé pour ${reportItem.supplierName || 'ce fournisseur'}.`,
+  )
 }
 
 const exportRestockCsv = () => {
@@ -609,7 +733,7 @@ onMounted(() => {
         <div class="suppliers-list-panel">
           <div class="suppliers-list-header">
             <span>{{ filteredSuppliers.length }} fournisseur(s) affiché(s)</span>
-            <span class="subtle-note">Recherche par nom, contact ou email</span>
+            <span class="subtle-note">Les 3 derniers par défaut, ou tous les résultats via la recherche</span>
           </div>
 
           <div class="form-group supplier-search-group">
@@ -634,7 +758,12 @@ onMounted(() => {
             <article v-for="supplier in filteredSuppliers" :key="supplier.id" class="supplier-list-row supplier-list-item">
               <strong>{{ supplier.name }}</strong>
               <span>{{ supplier.contact }}</span>
-              <a :href="`mailto:${supplier.email}`">{{ supplier.email }}</a>
+              <a
+                :href="buildSupplierRestockMailto(supplier)"
+                :title="`Envoyer une demande de réapprovisionnement à ${supplier.contact}`"
+              >
+                {{ supplier.email }}
+              </a>
               <span class="supplier-usage">
                 {{ getSupplierItemCount(supplier.id) }} article(s)
               </span>
@@ -757,10 +886,11 @@ onMounted(() => {
               <th>Stock max</th>
               <th>À réapprovisionner</th>
               <th>Couverture</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in itemsToRestock" :key="item.id">
+            <tr v-for="(item, index) in itemsToRestock" :key="item.id">
               <td>{{ item.name }}</td>
               <td>{{ item.internalRef || '-' }}</td>
               <td>{{ item.supplierName || '-' }}</td>
@@ -773,6 +903,25 @@ onMounted(() => {
                     <span :style="{ width: `${item.fillRate ?? 0}%` }"></span>
                   </div>
                   <span>{{ item.fillRate !== null ? `${item.fillRate}%` : 'N/A' }}</span>
+                </div>
+              </td>
+              <td>
+                <div class="restock-actions">
+                  <button
+                    type="button"
+                    class="btn btn-info btn-sm"
+                    @click="sendSingleRestockRequest(item)"
+                  >
+                    Envoyer cet article
+                  </button>
+                  <!-- <button
+                    v-if="shouldShowGroupedRestockAction(item, index)"
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    @click="sendGroupedRestockRequest(item)"
+                  >
+                    Envoyer tout le fournisseur
+                  </button> -->
                 </div>
               </td>
             </tr>
@@ -836,7 +985,7 @@ onMounted(() => {
         {{ filteredInventoryItems.length }} article(s) affiché(s) sur {{ items.length }}.
       </p>
 
-      <div v-if="filteredInventoryItems.length > 0" class="table-wrapper">
+      <div v-if="filteredInventoryItems.length > 0" class="table-wrapper inventory-table-wrapper">
         <table>
           <thead>
             <tr>
@@ -846,6 +995,7 @@ onMounted(() => {
               <th>Réf. fournisseur</th>
               <th>Prix</th>
               <th>Stock</th>
+              <th>Stock mini</th>
               <th>Stock max</th>
               <th>Écart</th>
               <th>P2</th>
@@ -867,6 +1017,7 @@ onMounted(() => {
                 {{ item.quantity }}
                 <span v-if="isLowStockItem(item)" class="stock-pill">Seuil atteint</span>
               </td>
+              <td>{{ getItemThreshold(item) }}</td>
               <td>{{ item.stockMax ?? '-' }}</td>
               <td>{{ getRestockGap(item) ?? '-' }}</td>
               <td>{{ item.isP2 ? 'Oui' : 'Non' }}</td>
@@ -1323,6 +1474,12 @@ select:focus {
   overflow-x: auto;
 }
 
+.inventory-table-wrapper {
+  max-height: calc(25 * 52px + 58px);
+  overflow: auto;
+  border-radius: 18px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1337,6 +1494,10 @@ td {
 }
 
 th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f9fbfd;
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1389,6 +1550,12 @@ tbody tr:hover {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, #d95d5d 0%, #f1a238 55%, #2f8f6b 100%);
+}
+
+.restock-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .actions-cell,
@@ -1498,6 +1665,7 @@ tbody tr:hover {
   }
 
   .supplier-form-actions,
+  .restock-actions,
   .supplier-actions,
   .use-action,
   .manage-actions {
