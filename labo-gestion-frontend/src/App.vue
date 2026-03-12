@@ -994,7 +994,7 @@ onUnmounted(() => {
               <td>{{ formatCurrency(item.price) }}</td>
               <td :class="{ 'low-stock': isLowStockItem(item) }">
                 {{ item.quantity }}
-                <span v-if="isLowStockItem(item)" class="stock-pill">Seuil atteint</span>
+                <!-- <span v-if="isLowStockItem(item)" class="stock-pill">Seuil atteint</span> -->
               </td>
               <td>{{ getItemThreshold(item) }}</td>
               <td>{{ item.stockMax ?? '-' }}</td>
