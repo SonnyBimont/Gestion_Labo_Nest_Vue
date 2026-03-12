@@ -1,14 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Supplier } from './entities/supplier.entity';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
+import { Item } from '../item/entities/item.entity';
 
 @Injectable()
 export class SupplierService {
   constructor(
     @InjectModel(Supplier)
     private supplierModel: typeof Supplier,
+    @InjectModel(Item)
+    private itemModel: typeof Item,
   ) {}
 
   async create(createSupplierDto: CreateSupplierDto): Promise<Supplier> {
@@ -34,6 +37,15 @@ export class SupplierService {
 
   async remove(id: number): Promise<void> {
     const supplier = await this.findOne(id);
+
+    const linkedItemsCount = await this.itemModel.count({ where: { supplierId: id } });
+
+    if (linkedItemsCount > 0) {
+      throw new ConflictException(
+        `Impossible de supprimer ce fournisseur : ${linkedItemsCount} article(s) y sont encore rattaché(s).`,
+      );
+    }
+
     await supplier.destroy();
   }
 }

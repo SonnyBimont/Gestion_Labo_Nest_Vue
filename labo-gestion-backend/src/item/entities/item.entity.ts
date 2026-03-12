@@ -28,6 +28,9 @@ export class Item extends Model {
   @Column({ type: DataType.INTEGER })
   declare quantity: number;
 
+  @Column({ type: DataType.INTEGER, allowNull: true })
+  declare stockMax: number | null;
+
   @Column({ type: DataType.INTEGER, defaultValue: 5 })
   declare lowStockThreshold: number;
 

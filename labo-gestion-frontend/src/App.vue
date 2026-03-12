@@ -1,14 +1,14 @@
-<!-- eslint-disable @typescript-eslint/no-unused-vars -->
-<!-- eslint-disable @typescript-eslint/no-explicit-any -->
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
-import { apiClient } from './services/api'
+import axios from 'axios'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import Login from './components/Login.vue'
+import { apiClient } from './services/api'
 
-// --- TYPES ---
 interface Supplier {
   id: number
   name: string
+  contact: string
+  email: string
 }
 
 interface Item {
@@ -16,68 +16,288 @@ interface Item {
   name: string
   internalRef?: string
   supplierRef: string
-  price?: number
+  price?: number | null
   quantity: number
+  stockMax?: number | null
   isP2: boolean
-  lowStockThreshold?: number
+  lowStockThreshold?: number | null
   supplierId?: number | null
   supplier?: Supplier
 }
 
-// --- ÉTAT ---
+interface RestockReportItem {
+  id: number
+  name: string
+  internalRef: string | null
+  supplierRef: string | null
+  supplierName: string | null
+  quantity: number
+  stockMax: number | null
+  quantityToRestock: number
+  fillRate: number | null
+  isLowStock: boolean
+}
+
+type InventorySortKey = 'name' | 'quantity' | 'stockMax' | 'supplier' | 'gap'
+
 const isAuthenticated = ref(false)
 const items = ref<Item[]>([])
 const suppliers = ref<Supplier[]>([])
+const restockReport = ref<RestockReportItem[]>([])
 const error = ref<string | null>(null)
 const successMessage = ref<string | null>(null)
-
 const editingId = ref<number | null>(null)
 const decrementAmounts = ref<Record<number, number>>({})
+const inventorySearch = ref('')
+const inventoryFilter = ref<'all' | 'low' | 'restock' | 'ok'>('all')
+const inventorySortKey = ref<InventorySortKey>('name')
+const inventorySortDirection = ref<'asc' | 'desc'>('asc')
+const supplierSearch = ref('')
+const supplierForm = ref({
+  name: '',
+  contact: '',
+  email: '',
+})
+const editingSupplierId = ref<number | null>(null)
 
-const formItem = ref<Item>({
+const createEmptyFormItem = (): Item => ({
   name: '',
   internalRef: '',
   supplierRef: '',
-  price: 0,
+  price: null,
   quantity: 0,
+  stockMax: null,
   isP2: false,
   lowStockThreshold: 5,
   supplierId: null,
 })
 
-// --- LOGIQUE AUTHENTIFICATION ---
-const checkAuth = async () => {
-  const token = localStorage.getItem('token')
-  if (token) {
-    isAuthenticated.value = true
-    error.value = null // On réinitialise l'erreur avant de charger
+const formItem = ref<Item>(createEmptyFormItem())
 
-    // On attend un cycle d'horloge pour que l'intercepteur Axios soit prêt
-    await nextTick()
+const getSupplierItemCount = (supplierId: number) =>
+  items.value.filter((item) => item.supplierId === supplierId).length
 
-    fetchItems()
-    fetchSuppliers()
+const isSupplierUsed = (supplierId: number) => getSupplierItemCount(supplierId) > 0
+
+const sortedSuppliers = computed(() =>
+  [...suppliers.value].sort((leftSupplier, rightSupplier) =>
+    leftSupplier.name.localeCompare(rightSupplier.name, 'fr'),
+  ),
+)
+
+const filteredSuppliers = computed(() => {
+  const searchTerm = supplierSearch.value.trim().toLocaleLowerCase('fr-FR')
+
+  if (searchTerm.length === 0) {
+    return sortedSuppliers.value
   }
+
+  return sortedSuppliers.value.filter((supplier) =>
+    [supplier.name, supplier.contact, supplier.email]
+      .some((value) => value.toLocaleLowerCase('fr-FR').includes(searchTerm)),
+  )
+})
+
+const itemsToRestock = computed(() =>
+  restockReport.value.filter((item) => item.quantityToRestock > 0),
+)
+
+const getItemThreshold = (item: Item) => item.lowStockThreshold ?? 5
+
+const isLowStockItem = (item: Item) => item.quantity <= getItemThreshold(item)
+
+const lowStockItems = computed(() => items.value.filter((item) => isLowStockItem(item)))
+
+const filteredInventoryItems = computed(() => {
+  const searchTerm = inventorySearch.value.trim().toLocaleLowerCase('fr-FR')
+
+  const filteredItems = items.value.filter((item) => {
+    const matchesSearch =
+      searchTerm.length === 0 ||
+      [
+        item.name,
+        item.internalRef,
+        item.supplierRef,
+        item.supplier?.name,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLocaleLowerCase('fr-FR').includes(searchTerm))
+
+    if (!matchesSearch) {
+      return false
+    }
+
+    if (inventoryFilter.value === 'low') {
+      return isLowStockItem(item)
+    }
+
+    if (inventoryFilter.value === 'restock') {
+      return getRestockGap(item) !== null && getRestockGap(item)! > 0
+    }
+
+    if (inventoryFilter.value === 'ok') {
+      return !isLowStockItem(item)
+    }
+
+    return true
+  })
+
+  return [...filteredItems].sort((leftItem, rightItem) => {
+    const leftGap = getRestockGap(leftItem) ?? -1
+    const rightGap = getRestockGap(rightItem) ?? -1
+    let comparison = 0
+
+    switch (inventorySortKey.value) {
+      case 'quantity':
+        comparison = leftItem.quantity - rightItem.quantity
+        break
+      case 'stockMax':
+        comparison = (leftItem.stockMax ?? -1) - (rightItem.stockMax ?? -1)
+        break
+      case 'supplier':
+        comparison = (leftItem.supplier?.name ?? '').localeCompare(rightItem.supplier?.name ?? '', 'fr')
+        break
+      case 'gap':
+        comparison = leftGap - rightGap
+        break
+      case 'name':
+      default:
+        comparison = leftItem.name.localeCompare(rightItem.name, 'fr')
+        break
+    }
+
+    return inventorySortDirection.value === 'asc' ? comparison : -comparison
+  })
+})
+
+const getErrorMessage = (err: unknown, fallback: string) => {
+  if (axios.isAxiosError(err)) {
+    const message = err.response?.data?.message
+
+    if (Array.isArray(message)) {
+      return message.join(', ')
+    }
+
+    if (typeof message === 'string' && message.length > 0) {
+      return message
+    }
+
+    if (err.response?.status === 401) {
+      logout()
+      return 'Session expirée. Veuillez vous reconnecter.'
+    }
+  }
+
+  return fallback
 }
 
-const logout = () => {
-  localStorage.removeItem('token')
-  isAuthenticated.value = false
-  items.value = []
-  suppliers.value = []
+const toNullableNumber = (value: number | string | null | undefined) => {
+  if (value === '' || value === null || value === undefined) {
+    return null
+  }
+
+  const parsedValue = Number(value)
+  return Number.isNaN(parsedValue) ? null : parsedValue
 }
 
-// --- MÉTHODES API ---
+const buildItemPayload = () => {
+  const payload: Record<string, string | number | boolean> = {
+    name: formItem.value.name.trim(),
+    supplierRef: formItem.value.supplierRef.trim(),
+    quantity: Number(formItem.value.quantity),
+    isP2: Boolean(formItem.value.isP2),
+  }
+
+  const internalRef = formItem.value.internalRef?.trim()
+  const price = toNullableNumber(formItem.value.price)
+  const stockMax = toNullableNumber(formItem.value.stockMax)
+  const lowStockThreshold = toNullableNumber(formItem.value.lowStockThreshold)
+  const supplierId = toNullableNumber(formItem.value.supplierId)
+
+  if (internalRef) payload.internalRef = internalRef
+  if (price !== null) payload.price = price
+  if (stockMax !== null) payload.stockMax = stockMax
+  if (lowStockThreshold !== null) payload.lowStockThreshold = lowStockThreshold
+  if (supplierId !== null) payload.supplierId = supplierId
+
+  return payload
+}
+
+const getRestockGap = (item: Item) => {
+  if (item.stockMax === null || item.stockMax === undefined) {
+    return null
+  }
+
+  return Math.max(item.stockMax - item.quantity, 0)
+}
+
+const formatCurrency = (value?: number | null) => {
+  if (value === null || value === undefined) {
+    return '-'
+  }
+
+  return new Intl.NumberFormat('fr-FR', {
+    style: 'currency',
+    currency: 'EUR',
+  }).format(value)
+}
+
+const exportRestockCsv = () => {
+  if (itemsToRestock.value.length === 0) {
+    error.value = 'Aucun article à exporter pour le réapprovisionnement.'
+    return
+  }
+
+  const header = [
+    'Article',
+    'Ref interne',
+    'Fournisseur',
+    'Ref fournisseur',
+    'Stock actuel',
+    'Stock max',
+    'Quantite a reapprovisionner',
+    'Taux de couverture (%)',
+  ]
+
+  const rows = itemsToRestock.value.map((item) => [
+    item.name,
+    item.internalRef ?? '',
+    item.supplierName ?? '',
+    item.supplierRef ?? '',
+    String(item.quantity),
+    String(item.stockMax ?? ''),
+    String(item.quantityToRestock),
+    String(item.fillRate ?? ''),
+  ])
+
+  const csvContent = [header, ...rows]
+    .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(';'))
+    .join('\n')
+
+  const file = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(file)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `reapprovisionnement-labo-${new Date().toISOString().slice(0, 10)}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+const toggleInventorySortDirection = () => {
+  inventorySortDirection.value = inventorySortDirection.value === 'asc' ? 'desc' : 'asc'
+}
+
 const fetchItems = async () => {
   try {
     const response = await apiClient.get<Item[]>('/items')
     items.value = response.data
-    response.data.forEach((item) => {
-      if (item.id) decrementAmounts.value[item.id] = 1
-    })
-  } catch (err: any) {
-    if (err.response?.status === 401) logout()
-    error.value = 'Erreur lors du chargement des équipements.'
+    decrementAmounts.value = Object.fromEntries(
+      response.data
+        .filter((item): item is Item & { id: number } => typeof item.id === 'number')
+        .map((item) => [item.id, decrementAmounts.value[item.id] ?? 1]),
+    )
+  } catch (err) {
+    error.value = getErrorMessage(err, 'Erreur lors du chargement des articles.')
   }
 }
 
@@ -86,92 +306,193 @@ const fetchSuppliers = async () => {
     const response = await apiClient.get<Supplier[]>('/suppliers')
     suppliers.value = response.data
   } catch (err) {
-    console.error('Erreur fournisseurs:', err)
+    error.value = getErrorMessage(err, 'Erreur lors du chargement des fournisseurs.')
   }
+}
+
+const submitSupplierForm = async () => {
+  error.value = null
+  successMessage.value = null
+
+  try {
+    const isEditingSupplier = editingSupplierId.value !== null
+    const payload = {
+      name: supplierForm.value.name.trim(),
+      contact: supplierForm.value.contact.trim(),
+      email: supplierForm.value.email.trim(),
+    }
+
+    const response = isEditingSupplier
+      ? await apiClient.patch<Supplier>(`/suppliers/${editingSupplierId.value}`, payload)
+      : await apiClient.post<Supplier>('/suppliers', payload)
+
+    await fetchSuppliers()
+    formItem.value.supplierId = response.data.id
+    cancelSupplierEdit()
+    successMessage.value = isEditingSupplier
+      ? `Fournisseur ${response.data.name} mis à jour.`
+      : `Fournisseur ${response.data.name} ajouté et sélectionné pour l'article.`
+  } catch (err) {
+    error.value = getErrorMessage(err, "Erreur lors de l'enregistrement du fournisseur.")
+  }
+}
+
+const editSupplier = (supplier: Supplier) => {
+  editingSupplierId.value = supplier.id
+  supplierForm.value = {
+    name: supplier.name,
+    contact: supplier.contact,
+    email: supplier.email,
+  }
+
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+const cancelSupplierEdit = () => {
+  editingSupplierId.value = null
+  supplierForm.value = {
+    name: '',
+    contact: '',
+    email: '',
+  }
+}
+
+const deleteSupplier = async (supplier: Supplier) => {
+  if (isSupplierUsed(supplier.id)) {
+    error.value = `Impossible de supprimer ${supplier.name} : ce fournisseur est encore utilisé par des articles.`
+    return
+  }
+
+  if (!window.confirm(`Supprimer le fournisseur ${supplier.name} ?`)) {
+    return
+  }
+
+  try {
+    await apiClient.delete(`/suppliers/${supplier.id}`)
+    if (formItem.value.supplierId === supplier.id) {
+      formItem.value.supplierId = null
+    }
+    if (editingSupplierId.value === supplier.id) {
+      cancelSupplierEdit()
+    }
+    await fetchSuppliers()
+    successMessage.value = `Fournisseur ${supplier.name} supprimé.`
+  } catch (err) {
+    error.value = getErrorMessage(err, 'Erreur lors de la suppression du fournisseur.')
+  }
+}
+
+const fetchRestockReport = async () => {
+  try {
+    const response = await apiClient.get<RestockReportItem[]>('/items/restock-report')
+    restockReport.value = response.data
+  } catch (err) {
+    error.value = getErrorMessage(err, 'Erreur lors du chargement du rapport de réapprovisionnement.')
+  }
+}
+
+const refreshInventoryData = async () => {
+  await Promise.all([fetchItems(), fetchRestockReport()])
+}
+
+const checkAuth = async () => {
+  const token = localStorage.getItem('token')
+  if (!token) {
+    return
+  }
+
+  isAuthenticated.value = true
+  error.value = null
+  await nextTick()
+  await Promise.all([refreshInventoryData(), fetchSuppliers()])
+}
+
+const logout = () => {
+  localStorage.removeItem('token')
+  isAuthenticated.value = false
+  items.value = []
+  suppliers.value = []
+  restockReport.value = []
+  editingId.value = null
+  editingSupplierId.value = null
+  formItem.value = createEmptyFormItem()
+  cancelSupplierEdit()
 }
 
 const submitForm = async () => {
   error.value = null
   successMessage.value = null
 
-  const payload = {
-    name: formItem.value.name,
-    internalRef: formItem.value.internalRef || null,
-    supplierRef: formItem.value.supplierRef,
-    price: formItem.value.price ? Number(formItem.value.price) : 0,
-    quantity: Number(formItem.value.quantity),
-    isP2: Boolean(formItem.value.isP2),
-    lowStockThreshold: Number(formItem.value.lowStockThreshold),
-    supplierId: formItem.value.supplierId ? Number(formItem.value.supplierId) : null,
-  }
-
   try {
+    const payload = buildItemPayload()
+
     if (editingId.value) {
-      const response = await apiClient.patch<Item>(`/items/${editingId.value}`, payload)
-      const index = items.value.findIndex((i) => i.id === editingId.value)
-      if (index !== -1) items.value[index] = response.data
-      successMessage.value = 'Équipement mis à jour.'
+      await apiClient.patch(`/items/${editingId.value}`, payload)
+      successMessage.value = 'Article mis à jour.'
     } else {
-      const response = await apiClient.post<Item>('/items', payload)
-      items.value.push(response.data)
-      if (response.data.id) decrementAmounts.value[response.data.id] = 1
-      successMessage.value = 'Équipement ajouté.'
+      await apiClient.post('/items', payload)
+      successMessage.value = 'Article ajouté.'
     }
+
+    await refreshInventoryData()
     cancelEdit()
-  } catch (err: any) {
-    error.value = err.response?.data?.message || "Erreur lors de l'enregistrement."
+  } catch (err) {
+    error.value = getErrorMessage(err, "Erreur lors de l'enregistrement.")
   }
 }
 
 const useItem = async (item: Item) => {
-  if (!item.id) return
-  const qty = parseInt(String(decrementAmounts.value[item.id]), 10)
+  if (!item.id) {
+    return
+  }
 
-  if (isNaN(qty) || qty <= 0) {
-    alert('Quantité invalide.')
+  const qty = decrementAmounts.value[item.id]
+
+  if (qty === undefined || !Number.isInteger(qty) || qty <= 0) {
+    error.value = 'Quantité invalide.'
     return
   }
 
   try {
-    const response = await apiClient.post<Item>(`/items/${item.id}/decrement`, { amount: qty })
-    const index = items.value.findIndex((i) => i.id === item.id)
-    if (index !== -1) items.value[index] = response.data
+    await apiClient.post(`/items/${item.id}/decrement`, { amount: qty })
     decrementAmounts.value[item.id] = 1
-    successMessage.value = `Stock mis à jour (${item.name}).`
-  } catch (err: any) {
-    error.value = err.response?.data?.message || 'Erreur de mise à jour du stock.'
+    successMessage.value = `Stock mis à jour pour ${item.name}.`
+    await refreshInventoryData()
+  } catch (err) {
+    error.value = getErrorMessage(err, 'Erreur de mise à jour du stock.')
   }
 }
 
 const deleteItem = async (id: number) => {
-  if (!confirm('Supprimer cet élément ?')) return
+  if (!window.confirm('Supprimer cet article ?')) {
+    return
+  }
+
   try {
     await apiClient.delete(`/items/${id}`)
-    items.value = items.value.filter((item) => item.id !== id)
-    successMessage.value = 'Supprimé avec succès.'
+    successMessage.value = 'Article supprimé.'
+    await refreshInventoryData()
   } catch (err) {
-    error.value = 'Erreur de suppression.'
+    error.value = getErrorMessage(err, 'Erreur de suppression.')
   }
 }
 
 const editItem = (item: Item) => {
-  editingId.value = item.id as number
-  formItem.value = { ...item }
+  editingId.value = item.id ?? null
+  formItem.value = {
+    ...item,
+    price: item.price ?? null,
+    stockMax: item.stockMax ?? null,
+    lowStockThreshold: item.lowStockThreshold ?? 5,
+    supplierId: item.supplierId ?? null,
+  }
+
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 const cancelEdit = () => {
   editingId.value = null
-  formItem.value = {
-    name: '',
-    internalRef: '',
-    supplierRef: '',
-    price: 0,
-    quantity: 0,
-    isP2: false,
-    lowStockThreshold: 5,
-    supplierId: null,
-  }
+  formItem.value = createEmptyFormItem()
 }
 
 onMounted(() => {
@@ -184,253 +505,1008 @@ onMounted(() => {
     <Login @login-success="checkAuth" />
   </div>
 
-  <main v-else class="container">
-    <div class="auth-header">
-      <span>Session active : Administrateur</span>
-      <button @click="logout" class="btn-sm btn-secondary">Déconnexion</button>
-    </div>
+  <main v-else class="page-shell">
+    <section class="hero-panel">
+      <div>
+        <p class="eyebrow">Pilotage du stock labo</p>
+        <h1>Suivi des niveaux et préparation du réapprovisionnement</h1>
+        <p class="hero-copy">
+          Comparez le stock actuel au stock cible pour transmettre au magasin central les quantités à
+          réapprovisionner par article.
+        </p>
+      </div>
 
-    <h1>Gestion de l'Inventaire</h1>
+      <div class="hero-actions">
+        <div class="session-badge">Session active : Administrateur</div>
+        <button @click="logout" class="btn btn-secondary">Déconnexion</button>
+      </div>
+    </section>
 
     <div v-if="error" class="alert error">{{ error }}</div>
     <div v-if="successMessage" class="alert success">{{ successMessage }}</div>
 
-    <section class="form-section">
-      <h2>{{ editingId ? 'Modifier' : 'Ajouter' }} un équipement</h2>
+    <section v-if="lowStockItems.length > 0" class="stock-alert-panel">
+      <div class="stock-alert-header">
+        <div>
+          <p class="section-kicker alert-kicker">Alerte seuil bas</p>
+          <h2>{{ lowStockItems.length }} article(s) ont atteint leur seuil critique</h2>
+        </div>
+        <span class="alert-total">Action recommandée immédiate</span>
+      </div>
+
+      <div class="stock-alert-list">
+        <article v-for="item in lowStockItems" :key="item.id" class="stock-alert-item">
+          <strong>{{ item.name }}</strong>
+          <span>
+            Stock actuel : {{ item.quantity }} | Seuil : {{ getItemThreshold(item) }}
+          </span>
+          <span v-if="getRestockGap(item) !== null">
+            Manque estimé : {{ getRestockGap(item) }}
+          </span>
+        </article>
+      </div>
+    </section>
+
+    <!-- <section class="summary-grid">
+      <article class="summary-card">
+        <span class="summary-label">Articles suivis</span>
+        <strong>{{ items.length }}</strong>
+      </article>
+      <article class="summary-card accent-card">
+        <span class="summary-label">Articles à réapprovisionner</span>
+        <strong>{{ itemsToRestock.length }}</strong>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Quantité totale à recommander</span>
+        <strong>{{ totalMissingQuantity }}</strong>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Taux moyen de couverture</span>
+        <strong>{{ averageFillRate !== null ? `${averageFillRate}%` : 'N/A' }}</strong>
+      </article>
+    </section> -->
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-kicker">Fournisseurs</p>
+          <h2>Créer et consulter les fournisseurs référencés</h2>
+        </div>
+      </div>
+
+      <div class="suppliers-layout">
+        <form @submit.prevent="submitSupplierForm" class="supplier-form-panel">
+          <div class="form-group">
+            <label for="supplierName">Nom du fournisseur</label>
+            <input id="supplierName" v-model="supplierForm.name" type="text" required />
+          </div>
+
+          <div class="form-group">
+            <label for="supplierContact">Contact</label>
+            <input id="supplierContact" v-model="supplierForm.contact" type="text" required />
+          </div>
+
+          <div class="form-group">
+            <label for="supplierEmail">Email</label>
+            <input id="supplierEmail" v-model="supplierForm.email" type="email" required />
+          </div>
+
+          <div class="supplier-form-actions">
+            <button type="submit" class="btn btn-primary">
+              {{ editingSupplierId ? 'Mettre à jour le fournisseur' : 'Ajouter le fournisseur' }}
+            </button>
+            <button
+              v-if="editingSupplierId"
+              type="button"
+              class="btn btn-secondary"
+              @click="cancelSupplierEdit"
+            >
+              Annuler
+            </button>
+          </div>
+        </form>
+
+        <div class="suppliers-list-panel">
+          <div class="suppliers-list-header">
+            <span>{{ filteredSuppliers.length }} fournisseur(s) affiché(s)</span>
+            <span class="subtle-note">Recherche par nom, contact ou email</span>
+          </div>
+
+          <div class="form-group supplier-search-group">
+            <label for="supplierSearch">Rechercher un fournisseur</label>
+            <input
+              id="supplierSearch"
+              v-model="supplierSearch"
+              type="text"
+              placeholder="Nom du fournisseur, contact ou email"
+            />
+          </div>
+
+          <div v-if="filteredSuppliers.length > 0" class="supplier-list-wrapper">
+            <div class="supplier-list-head supplier-list-row">
+              <span>Fournisseur</span>
+              <span>Contact</span>
+              <span>Email</span>
+              <span>Articles liés</span>
+              <span>Actions</span>
+            </div>
+
+            <article v-for="supplier in filteredSuppliers" :key="supplier.id" class="supplier-list-row supplier-list-item">
+              <strong>{{ supplier.name }}</strong>
+              <span>{{ supplier.contact }}</span>
+              <a :href="`mailto:${supplier.email}`">{{ supplier.email }}</a>
+              <span class="supplier-usage">
+                {{ getSupplierItemCount(supplier.id) }} article(s)
+              </span>
+              <div class="supplier-actions">
+                <button type="button" class="btn btn-info btn-sm" @click="editSupplier(supplier)">
+                  Éditer
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-danger btn-sm"
+                  @click="deleteSupplier(supplier)"
+                  :disabled="isSupplierUsed(supplier.id)"
+                  :title="isSupplierUsed(supplier.id) ? 'Suppression bloquée : fournisseur utilisé par des articles.' : 'Supprimer ce fournisseur'"
+                >
+                  Supprimer
+                </button>
+              </div>
+            </article>
+          </div>
+          <p v-else class="empty-state">Aucun fournisseur ne correspond à la recherche.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-kicker">Paramétrage article</p>
+          <h2>{{ editingId ? 'Modifier un article' : 'Ajouter un article' }}</h2>
+        </div>
+      </div>
+
       <form @submit.prevent="submitForm" class="item-form">
-        <div class="form-group">
-          <label>Nom</label>
-          <input type="text" v-model="formItem.name" required />
+        <div class="form-group wide">
+          <label for="name">Nom</label>
+          <input id="name" v-model="formItem.name" type="text" required />
         </div>
+
         <div class="form-group">
-          <label>Réf. Interne</label>
-          <input type="text" v-model="formItem.internalRef" />
+          <label for="internalRef">Réf. interne</label>
+          <input id="internalRef" v-model="formItem.internalRef" type="text" />
         </div>
+
         <div class="form-group">
-          <label>Fournisseur</label>
-          <select v-model="formItem.supplierId" class="select-input">
+          <label for="supplier">Fournisseur</label>
+          <select id="supplier" v-model="formItem.supplierId">
             <option :value="null">-- Sélectionner --</option>
-            <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
+            <option v-for="supplier in suppliers" :key="supplier.id" :value="supplier.id">
+              {{ supplier.name }}
+            </option>
           </select>
         </div>
+
         <div class="form-group">
-          <label>Réf. Fournisseur</label>
-          <input type="text" v-model="formItem.supplierRef" required />
+          <label for="supplierRef">Réf. fournisseur</label>
+          <input id="supplierRef" v-model="formItem.supplierRef" type="text" required />
         </div>
+
         <div class="form-group">
-          <label>Prix (€)</label>
-          <input type="number" step="0.01" v-model="formItem.price" min="0" />
+          <label for="price">Prix unitaire</label>
+          <input id="price" v-model.number="formItem.price" type="number" step="0.01" min="0" />
         </div>
+
         <div class="form-group">
-          <label>Quantité</label>
-          <input type="number" v-model="formItem.quantity" min="0" required />
+          <label for="quantity">Stock actuel</label>
+          <input id="quantity" v-model.number="formItem.quantity" type="number" min="0" required />
         </div>
-        <div class="form-group checkbox">
-          <label><input type="checkbox" v-model="formItem.isP2" /> Zone P2</label>
+
+        <div class="form-group">
+          <label for="stockMax">Stock max</label>
+          <input id="stockMax" v-model.number="formItem.stockMax" type="number" min="0" />
         </div>
+
+        <div class="form-group">
+          <label for="threshold">Seuil d'alerte</label>
+          <input
+            id="threshold"
+            v-model.number="formItem.lowStockThreshold"
+            type="number"
+            min="0"
+          />
+        </div>
+
+        <label class="checkbox-group">
+          <input v-model="formItem.isP2" type="checkbox" />
+          <span>Zone P2</span>
+        </label>
+
         <div class="form-actions">
-          <button type="submit" class="btn-primary">
+          <button type="submit" class="btn btn-primary">
             {{ editingId ? 'Mettre à jour' : 'Enregistrer' }}
           </button>
-          <button type="button" v-if="editingId" @click="cancelEdit" class="btn-secondary">
+          <button v-if="editingId" type="button" @click="cancelEdit" class="btn btn-secondary">
             Annuler
           </button>
         </div>
       </form>
     </section>
 
-    <section class="table-section">
-      <table v-if="items.length > 0">
-        <thead>
-          <tr>
-            <th>Nom</th>
-            <th>Réf. Interne</th>
-            <th>Fournisseur</th>
-            <th>Réf. Fournisseur</th>
-            <th>Prix</th>
-            <th>Stock</th>
-            <th>P2</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in items" :key="item.id">
-            <td>{{ item.name }}</td>
-            <td>{{ item.internalRef || '-' }}</td>
-            <td>{{ item.supplier?.name || '-' }}</td>
-            <td>{{ item.supplierRef || '-' }}</td>
-            <td>{{ item.price ? item.price + ' €' : '-' }}</td>
-            <td :class="{ 'low-stock': item.quantity <= (item.lowStockThreshold || 5) }">
-              {{ item.quantity }}
-            </td>
-            <td>{{ item.isP2 ? 'Oui' : 'Non' }}</td>
-            <td class="actions-cell">
-              <div class="use-action">
-                <input
-                  type="number"
-                  v-model.number="decrementAmounts[item.id!]"
-                  min="1"
-                  class="small-input"
-                />
-                <button
-                  @click="useItem(item)"
-                  class="btn-sm btn-warning"
-                  :disabled="item.quantity === 0"
-                >
-                  Utiliser
-                </button>
-              </div>
-              <div class="manage-actions">
-                <button @click="editItem(item)" class="btn-sm btn-info">Éditer</button>
-                <button @click="deleteItem(item.id!)" class="btn-sm btn-danger">X</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else-if="!error">Inventaire vide.</p>
+    <section class="panel">
+      <div class="panel-heading report-heading">
+        <div>
+          <p class="section-kicker">Réapprovisionnement</p>
+          <h2>Préparation pour le magasin central</h2>
+        </div>
+
+        <button @click="exportRestockCsv" class="btn btn-primary" :disabled="itemsToRestock.length === 0">
+          Export CSV
+        </button>
+      </div>
+
+      <div v-if="itemsToRestock.length > 0" class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Article</th>
+              <th>Réf. interne</th>
+              <th>Fournisseur</th>
+              <th>Stock actuel</th>
+              <th>Stock max</th>
+              <th>À réapprovisionner</th>
+              <th>Couverture</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in itemsToRestock" :key="item.id">
+              <td>{{ item.name }}</td>
+              <td>{{ item.internalRef || '-' }}</td>
+              <td>{{ item.supplierName || '-' }}</td>
+              <td>{{ item.quantity }}</td>
+              <td>{{ item.stockMax ?? '-' }}</td>
+              <td class="restock-gap">{{ item.quantityToRestock }}</td>
+              <td>
+                <div class="coverage-cell">
+                  <div class="coverage-bar">
+                    <span :style="{ width: `${item.fillRate ?? 0}%` }"></span>
+                  </div>
+                  <span>{{ item.fillRate !== null ? `${item.fillRate}%` : 'N/A' }}</span>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="empty-state">
+        Tous les articles avec un stock max défini sont au niveau attendu. Aucun réapprovisionnement à transmettre.
+      </p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-kicker">Inventaire détaillé</p>
+          <h2>Vue opérationnelle</h2>
+        </div>
+      </div>
+
+      <div class="inventory-toolbar">
+        <div class="form-group inventory-search">
+          <label for="inventorySearch">Recherche</label>
+          <input
+            id="inventorySearch"
+            v-model="inventorySearch"
+            type="text"
+            placeholder="Nom, référence, fournisseur..."
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="inventoryFilter">Filtre</label>
+          <select id="inventoryFilter" v-model="inventoryFilter">
+            <option value="all">Tous les articles</option>
+            <option value="low">Sous seuil bas</option>
+            <option value="restock">À réapprovisionner</option>
+            <option value="ok">Stock normal</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="inventorySortKey">Trier par</label>
+          <select id="inventorySortKey" v-model="inventorySortKey">
+            <option value="name">Nom</option>
+            <option value="supplier">Fournisseur</option>
+            <option value="quantity">Stock actuel</option>
+            <option value="stockMax">Stock max</option>
+            <option value="gap">Écart au stock max</option>
+          </select>
+        </div>
+
+        <div class="form-group sort-direction-group">
+          <label>Ordre</label>
+          <button type="button" @click="toggleInventorySortDirection" class="btn btn-secondary">
+            {{ inventorySortDirection === 'asc' ? 'Croissant' : 'Décroissant' }}
+          </button>
+        </div>
+      </div>
+
+      <p class="inventory-result-count">
+        {{ filteredInventoryItems.length }} article(s) affiché(s) sur {{ items.length }}.
+      </p>
+
+      <div v-if="filteredInventoryItems.length > 0" class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Nom</th>
+              <th>Réf. interne</th>
+              <th>Fournisseur</th>
+              <th>Réf. fournisseur</th>
+              <th>Prix</th>
+              <th>Stock</th>
+              <th>Stock max</th>
+              <th>Écart</th>
+              <th>P2</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="item in filteredInventoryItems"
+              :key="item.id"
+              :class="{ 'low-stock-row': isLowStockItem(item) }"
+            >
+              <td>{{ item.name }}</td>
+              <td>{{ item.internalRef || '-' }}</td>
+              <td>{{ item.supplier?.name || '-' }}</td>
+              <td>{{ item.supplierRef || '-' }}</td>
+              <td>{{ formatCurrency(item.price) }}</td>
+              <td :class="{ 'low-stock': isLowStockItem(item) }">
+                {{ item.quantity }}
+                <span v-if="isLowStockItem(item)" class="stock-pill">Seuil atteint</span>
+              </td>
+              <td>{{ item.stockMax ?? '-' }}</td>
+              <td>{{ getRestockGap(item) ?? '-' }}</td>
+              <td>{{ item.isP2 ? 'Oui' : 'Non' }}</td>
+              <td class="actions-cell">
+                <div class="use-action">
+                  <input
+                    v-if="item.id"
+                    v-model.number="decrementAmounts[item.id]"
+                    type="number"
+                    min="1"
+                    class="small-input"
+                  />
+                  <button
+                    @click="useItem(item)"
+                    class="btn btn-warning btn-sm"
+                    :disabled="item.quantity === 0"
+                  >
+                    Utiliser
+                  </button>
+                </div>
+                <div class="manage-actions">
+                  <button @click="editItem(item)" class="btn btn-info btn-sm">Éditer</button>
+                  <button @click="deleteItem(item.id!)" class="btn btn-danger btn-sm">Supprimer</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="empty-state">Aucun article ne correspond aux critères de recherche ou de filtre.</p>
     </section>
   </main>
 </template>
 
 <style scoped>
-.container {
-  max-width: 1100px;
-  margin: 1.5rem auto;
-  font-family: sans-serif;
-  color: #333;
+:global(body) {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(188, 221, 255, 0.48), transparent 28%),
+    linear-gradient(180deg, #f3f8fc 0%, #e6eef6 100%);
+  color: #1f2a37;
 }
-.auth-header {
+
+.page-shell {
+  width: min(1380px, calc(100vw - 32px));
+  margin: 0 auto;
+  display: grid;
+  gap: 24px;
+  padding: 24px 0 48px;
+}
+
+.hero-panel,
+.panel,
+.summary-card {
+  border: 1px solid rgba(18, 56, 96, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 50px rgba(40, 71, 103, 0.08);
+}
+
+.hero-panel {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 12px;
-  background: #eee;
-  border-radius: 6px;
-  margin-bottom: 2rem;
+  gap: 24px;
+  padding: 28px;
+  border-radius: 28px;
 }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 1rem;
+
+.eyebrow,
+.section-kicker,
+.summary-label {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  color: #4f6b88;
 }
-th,
-td {
-  border: 1px solid #ddd;
-  padding: 12px;
-  text-align: left;
+
+h1,
+h2,
+p {
+  margin: 0;
 }
-th {
-  background: #f4f4f4;
+
+h1 {
+  max-width: 780px;
+  font-size: clamp(2rem, 3vw, 3.4rem);
+  line-height: 1.05;
+  color: #123860;
 }
-.low-stock {
-  color: #d9534f;
-  font-weight: bold;
+
+h2 {
+  font-size: 1.35rem;
+  color: #14344f;
 }
-.alert {
-  padding: 12px;
-  border-radius: 4px;
-  margin-bottom: 1rem;
+
+.hero-copy {
+  max-width: 760px;
+  margin-top: 14px;
+  line-height: 1.6;
+  color: #526272;
 }
-.error {
-  background: #f2dede;
-  color: #a94442;
-}
-.success {
-  background: #dff0d8;
-  color: #3c763d;
-}
-.form-section {
-  background: #f9f9f9;
-  padding: 1.5rem;
-  border-radius: 8px;
-  margin-bottom: 2rem;
-  border: 1px solid #eee;
-}
-.item-form {
+
+.hero-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
+  flex-direction: column;
   align-items: flex-end;
+  gap: 12px;
 }
+
+.session-badge {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #dce9f8;
+  color: #123860;
+  font-weight: 700;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.summary-card {
+  padding: 20px;
+  border-radius: 22px;
+}
+
+.summary-card strong {
+  font-size: 2rem;
+  color: #0f2d4a;
+}
+
+.accent-card {
+  background: linear-gradient(135deg, #123860 0%, #1f6c83 100%);
+}
+
+.accent-card .summary-label,
+.accent-card strong {
+  color: #f6fbff;
+}
+
+.panel {
+  padding: 24px;
+  border-radius: 28px;
+}
+
+.stock-alert-panel {
+  padding: 22px;
+  border-radius: 24px;
+  border: 1px solid rgba(191, 75, 44, 0.18);
+  background: linear-gradient(135deg, rgba(255, 238, 232, 0.95) 0%, rgba(255, 247, 236, 0.98) 100%);
+  box-shadow: 0 16px 34px rgba(191, 75, 44, 0.08);
+}
+
+.stock-alert-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.alert-kicker {
+  color: #a14a23;
+}
+
+.alert-total {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(191, 75, 44, 0.12);
+  color: #8f3e1e;
+  font-weight: 800;
+}
+
+.stock-alert-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.stock-alert-item {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(191, 75, 44, 0.12);
+  color: #6e3a27;
+}
+
+.suppliers-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.supplier-form-panel,
+.suppliers-list-panel {
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(18, 56, 96, 0.08);
+  background: #f9fbfd;
+}
+
+.supplier-form-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.supplier-form-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.suppliers-list-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.supplier-search-group {
+  max-width: 460px;
+}
+
+.suppliers-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #35526c;
+  font-weight: 700;
+}
+
+.subtle-note {
+  font-size: 0.84rem;
+  color: #668098;
+  font-weight: 600;
+}
+
+.supplier-list-wrapper {
+  display: grid;
+  gap: 10px;
+}
+
+.supplier-list-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1fr) minmax(190px, 1.2fr) minmax(110px, 0.7fr) minmax(170px, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.supplier-list-head {
+  padding: 0 14px;
+  color: #53708c;
+  font-size: 0.79rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.supplier-list-item {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid #dde7f0;
+  background: #fff;
+  color: #26435d;
+}
+
+.supplier-usage {
+  color: #587088;
+  font-weight: 700;
+}
+
+.supplier-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.supplier-list-item a {
+  color: #1f6c83;
+  word-break: break-word;
+}
+
+.panel-heading,
+.report-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.item-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
-input,
-select {
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+
+.form-group.wide {
+  grid-column: span 2;
 }
-button {
-  padding: 8px 14px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
+
+.checkbox-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  font-weight: 600;
+  color: #20415d;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  grid-column: 1 / -1;
+}
+
+.inventory-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.inventory-search {
+  min-width: 0;
+}
+
+.sort-direction-group {
+  align-self: stretch;
+}
+
+.inventory-result-count {
+  margin-bottom: 14px;
+  color: #5a7187;
   font-weight: 600;
 }
+
+label {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #2a465f;
+}
+
+input,
+select {
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid #c9d8e6;
+  border-radius: 14px;
+  background: #f9fbfd;
+  color: #17324f;
+  font: inherit;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: #1f6c83;
+  box-shadow: 0 0 0 4px rgba(31, 108, 131, 0.12);
+}
+
+.btn {
+  min-height: 42px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
 .btn-primary {
-  background: #0275d8;
-  color: white;
+  background: linear-gradient(135deg, #c9672b 0%, #f1a238 100%);
+  color: #fff;
+  box-shadow: 0 12px 26px rgba(201, 103, 43, 0.2);
 }
+
 .btn-secondary {
-  background: #6c757d;
-  color: white;
+  background: #dce9f8;
+  color: #123860;
 }
+
 .btn-warning {
-  background: #f0ad4e;
-  color: white;
+  background: #f0b34f;
+  color: #4f2c00;
 }
+
 .btn-info {
-  background: #5bc0de;
-  color: white;
+  background: #7fc2d8;
+  color: #083349;
 }
+
 .btn-danger {
-  background: #d9534f;
-  color: white;
+  background: #d95d5d;
+  color: #fff;
 }
+
 .btn-sm {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+}
+
+.alert {
+  padding: 14px 18px;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  font-weight: 600;
+}
+
+.error {
+  background: rgba(217, 93, 93, 0.1);
+  border-color: rgba(217, 93, 93, 0.16);
+  color: #8f2323;
+}
+
+.success {
+  background: rgba(71, 152, 93, 0.12);
+  border-color: rgba(71, 152, 93, 0.18);
+  color: #245f33;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 14px 12px;
+  border-bottom: 1px solid #e2ebf3;
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #53708c;
+}
+
+tbody tr:hover {
+  background: rgba(220, 233, 248, 0.32);
+}
+
+.low-stock-row {
+  background: rgba(255, 239, 235, 0.55);
+}
+
+.low-stock,
+.restock-gap {
+  font-weight: 800;
+  color: #bf4b2c;
+}
+
+.stock-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
   padding: 4px 8px;
-  font-size: 0.85rem;
+  border-radius: 999px;
+  background: rgba(191, 75, 44, 0.12);
+  color: #9d4120;
+  font-size: 0.75rem;
+  font-weight: 800;
+  vertical-align: middle;
 }
-.actions-cell {
+
+.coverage-cell {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 10px;
 }
+
+.coverage-bar {
+  width: 110px;
+  height: 9px;
+  border-radius: 999px;
+  background: #e5edf5;
+  overflow: hidden;
+}
+
+.coverage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #d95d5d 0%, #f1a238 55%, #2f8f6b 100%);
+}
+
+.actions-cell,
 .use-action,
 .manage-actions {
   display: flex;
-  gap: 4px;
-}
-.small-input {
-  width: 50px;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
-@media (prefers-color-scheme: dark) {
-  .container {
-    color: #ddd;
+.actions-cell {
+  min-width: 220px;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.small-input {
+  width: 72px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.empty-state {
+  padding: 20px;
+  border-radius: 18px;
+  background: #f6f9fc;
+  color: #496176;
+}
+
+@media (max-width: 1100px) {
+  .summary-grid,
+  .item-form,
+  .inventory-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .auth-header {
-    background: #222;
+
+  .supplier-list-row {
+    grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) minmax(190px, 1.2fr) minmax(100px, 0.8fr);
   }
-  th {
-    background: #222;
+
+  .supplier-list-head span:last-child {
+    display: none;
   }
-  td {
-    border-color: #444;
+
+  .supplier-list-item .supplier-actions {
+    grid-column: 1 / -1;
   }
-  .form-section {
-    background: #1a1a1a;
-    border-color: #333;
+
+  .suppliers-layout {
+    grid-template-columns: 1fr;
   }
-  input,
-  select {
-    background: #222;
-    color: white;
-    border-color: #444;
+
+  .hero-panel {
+    flex-direction: column;
+  }
+
+  .stock-alert-header,
+  .hero-actions {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .page-shell {
+    width: min(100vw - 20px, 1380px);
+    padding: 14px 0 32px;
+  }
+
+  .summary-grid,
+  .item-form,
+  .inventory-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .form-group.wide,
+  .form-actions {
+    grid-column: auto;
+  }
+
+  .panel,
+  .hero-panel,
+  .summary-card {
+    border-radius: 20px;
+  }
+
+  .panel-heading,
+  .report-heading,
+  .stock-alert-header,
+  .form-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .suppliers-list-header,
+  .supplier-list-row {
+    grid-template-columns: 1fr;
+  }
+
+  .supplier-list-head {
+    display: none;
+  }
+
+  .btn,
+  .btn-sm {
+    width: 100%;
+  }
+
+  .supplier-form-actions,
+  .supplier-actions,
+  .use-action,
+  .manage-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .small-input {
+    width: 100%;
   }
 }
 </style>

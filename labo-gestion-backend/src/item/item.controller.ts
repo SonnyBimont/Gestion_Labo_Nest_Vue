@@ -29,6 +29,11 @@ export class ItemController {
     return this.itemService.findAll();
   }
 
+  @Get('restock-report')
+  getRestockReport() {
+    return this.itemService.getRestockReport();
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     // '+' convertit l'ID reçu en chaîne de caractères (depuis l'URL) en nombre entier

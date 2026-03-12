@@ -26,15 +26,22 @@ export class CreateItemDto {
   @Min(0)
   readonly quantity: number;
 
+  @IsInt()
+  @Min(0)
+  @IsOptional()
+  readonly stockMax?: number;
+
   @IsBoolean()
   @IsOptional()
   readonly isP2?: boolean;
 
   @IsInt()
+  @Min(0)
   @IsOptional()
   readonly lowStockThreshold?: number;
 
   @IsInt()
+  @Min(1)
   @IsOptional()
   readonly supplierId?: number;
 }
